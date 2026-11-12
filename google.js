@@ -7,7 +7,9 @@
  */
 (function () {
   var CFG = window.APP_CONFIG || {};
-  var SCOPES = 'https://www.googleapis.com/auth/drive.file https://www.googleapis.com/auth/calendar.app.created';
+  /* Se CALENDAR_ID estiver preenchido (agenda da família), o app grava eventos nela e precisa da permissão calendar.events.
+     Sem CALENDAR_ID, usa só a agenda própria “Saúde” (calendar.app.created). */
+  var SCOPES = 'https://www.googleapis.com/auth/drive.file ' + (CFG.CALENDAR_ID ? 'https://www.googleapis.com/auth/calendar.events' : 'https://www.googleapis.com/auth/calendar.app.created');
   var token = null, tokenExp = 0;
   var ROOT = CFG.ROOT_FOLDER || 'Saúde a Dois';
   var TZ = CFG.TIMEZONE || 'America/Sao_Paulo';
@@ -226,6 +228,7 @@
 
   /* ---------- Agenda ---------- */
   function calId() {
+    if (CFG.CALENDAR_ID) return Promise.resolve(CFG.CALENDAR_ID);
     var id = lsGet('gcal');
     if (id) return Promise.resolve(id);
     return api('https://www.googleapis.com/calendar/v3/calendars', {
