@@ -1,7 +1,8 @@
 /* ---------- armazenamento ---------- */
 var KEY='saude_dois_proto_v1';
 function load(){try{var r=localStorage.getItem(KEY);return r?JSON.parse(r):null}catch(e){return null}}
-function save(){try{var pr=S.profiles&&S.profiles[S.cur];if(pr)pr.updatedAt=Date.now();localStorage.setItem(KEY,JSON.stringify(S))}catch(e){}}
+function persist(){try{localStorage.setItem(KEY,JSON.stringify(S))}catch(e){}}
+function save(){var pr=S.profiles&&S.profiles[S.cur];if(pr)pr.updatedAt=Date.now();persist();if(window.schedulePush)schedulePush()}
 function toast(t){var d=document.createElement('div');d.className='toast';d.textContent=t;document.body.appendChild(d);setTimeout(function(){d.remove()},4200)}
 
 function seed(){
@@ -59,8 +60,121 @@ function render(keep){
   var v=document.getElementById('view');
   var fn={resumo:vResumo,importar:vImportar,exames:vExames,diario:vDiario,agenda:vAgenda,consulta:vConsulta,remedios:vRemedios,google:vGoogle}[tab];
   v.innerHTML=fn();
+  atualizaBadge();
   if(!keep)window.scrollTo(0,0);
 }
+
+
+/* ---------- estoque dos remédios ---------- */
+function isoHoje(){var d=new Date();return d.getFullYear()+'-'+pad(d.getMonth()+1)+'-'+pad(d.getDate())}
+function isoBr(s){var x=String(s||'').split('-');return x.length===3?x[2]+'/'+x[1]+'/'+x[0]:''}
+function numE(v){var n=parseFloat(String(v||'').replace(',','.'));return isNaN(n)?0:n}
+/* devolve {fim:'aaaa-mm-dd', faltam:dias} ou null se faltar dado */
+function estoque(m){
+  var q=numE(m.qtd),dia=numE(m.porVez)*numE(m.vezes);
+  if(!m.compra||q<=0||dia<=0)return null;
+  var ini=new Date(m.compra+'T12:00:00'),dias=Math.floor(q/dia);
+  var fim=new Date(ini.getTime()+dias*86400000);
+  var hoje=new Date(isoHoje()+'T12:00:00');
+  return{fim:fim.getFullYear()+'-'+pad(fim.getMonth()+1)+'-'+pad(fim.getDate()),faltam:Math.round((fim-hoje)/86400000),aviso:parseInt(m.aviso,10)||7};
+}
+function estoqueHtml(m){
+  var e=estoque(m);
+  if(!e)return m.compra?'<div class="mut">Estoque: preencha quantidade e posologia para calcular.</div>':'';
+  var cor=e.faltam<=0?'t-hi':(e.faltam<=e.aviso?'t-lim':'t-ok');
+  var tx=e.faltam<0?'acabou há '+(-e.faltam)+' dia(s)':e.faltam===0?'acaba hoje':'faltam '+e.faltam+' dia(s)';
+  return'<div><span class="mut">Estoque:</span> <span class="tag '+cor+'">'+tx+'</span> <span class="mut">(até '+isoBr(e.fim)+'; comprado em '+isoBr(m.compra)+')</span></div>';
+}
+function comprei(i){
+  var m=P().meds[i];
+  var q=prompt('Quantas unidades você comprou agora?',m.qtd||'');
+  if(q===null)return;
+  if(numE(q)<=0){alert('Informe uma quantidade.');return}
+  m.qtd=String(numE(q));m.compra=isoHoje();save();render(true);toast('Compra registrada: '+m.n);
+}
+function alertasEstoque(){
+  var out=[];
+  Object.keys(S.profiles).forEach(function(k){
+    (S.profiles[k].meds||[]).forEach(function(m){
+      var e=estoque(m);
+      if(e&&e.faltam<=e.aviso)out.push({quem:S.profiles[k].nome.split(' ')[0],n:m.n,e:e});
+    });
+  });
+  out.sort(function(x,y){return x.e.faltam-y.e.faltam});
+  return out;
+}
+function alertaHtml(){
+  var al=alertasEstoque();if(!al.length)return'';
+  var h='<div class="card alert"><h2>🛒 Hora de comprar</h2><ul style="margin:0;padding-left:18px">';
+  al.forEach(function(a){
+    var tx=a.e.faltam<0?'acabou há '+(-a.e.faltam)+' dia(s)':a.e.faltam===0?'acaba hoje':'acaba em '+a.e.faltam+' dia(s) ('+isoBr(a.e.fim)+')';
+    h+='<li><b>'+esc(a.n)+'</b> ('+esc(a.quem)+'): '+tx+'</li>';
+  });
+  return h+'</ul></div>';
+}
+function avisoBtnHtml(){
+  if(!('Notification' in window))return'';
+  if(Notification.permission==='granted')return'<p class="mut">🔔 Avisos neste aparelho ativados (aparecem quando você abre o app).</p>';
+  if(Notification.permission==='denied')return'<p class="mut">🔔 Avisos bloqueados nas configurações do navegador.</p>';
+  return'<button class="btn sm sec" onclick="ativaAvisos()">🔔 Ativar avisos neste aparelho</button>';
+}
+function ativaAvisos(){Notification.requestPermission().then(function(){render(true);notificaEstoque(true)})}
+function notificaEstoque(forca){
+  try{
+    if(!('Notification' in window)||Notification.permission!=='granted')return;
+    var al=alertasEstoque();if(!al.length)return;
+    var k='nt:'+isoHoje();if(!forca&&localStorage.getItem(k))return;localStorage.setItem(k,'1');
+    var tx=al.map(function(a){return a.n+' ('+a.quem+')'}).join(', ');
+    var op={body:'Hora de comprar: '+tx,icon:'icon-192.png',tag:'estoque'};
+    if(navigator.serviceWorker&&navigator.serviceWorker.ready)navigator.serviceWorker.ready.then(function(r){r.showNotification('Saúde a Dois',op)});
+    else new Notification('Saúde a Dois',op);
+  }catch(e){}
+}
+function atualizaBadge(){
+  var b=document.querySelector('#nav button[data-t=remedios]');if(!b)return;
+  var o=b.querySelector('.bdg');if(o)o.remove();
+  var n=alertasEstoque().length;
+  if(n){var s=document.createElement('span');s.className='bdg';s.textContent=n;b.appendChild(s)}
+}
+
+/* ---------- sincronização automática entre aparelhos (via Drive) ---------- */
+var syncTxt='',syncBusy=false,syncTimer=null;
+function schedulePush(){
+  if(!(window.G&&G.connected()))return;
+  clearTimeout(syncTimer);syncTimer=setTimeout(function(){syncProfile(S.cur)},4000);
+}
+function syncProfile(perfil){
+  return G.pull(perfil).then(function(r){
+    if(!S.sync)S.sync={};
+    var p=S.profiles[perfil],ls=S.sync[perfil]||0,locChg=(p.updatedAt||0)>ls;
+    var temDados=!!(p.exames.length||p.meds.length||p.bio.length||p.diario.length||p.agenda.length||p.pend.length);
+    function enviar(){return G.push(perfil,p).then(function(){S.sync[perfil]=Date.now()+3000;persist();return 'enviado'})}
+    function trazer(){
+      r.dados.updatedAt=Date.now();S.profiles[perfil]=r.dados;persist();S.sync[perfil]=Date.now();persist();return 'trazido';
+    }
+    if(!r)return temDados?enviar():'nada';
+    var remChg=r.modificadoEm>ls;
+    if(remChg&&!locChg)return trazer();
+    if(locChg&&!remChg)return enviar();
+    if(!locChg&&!remChg)return 'igual';
+    if(confirm('Os dados de '+p.nome.split(' ')[0]+' mudaram neste aparelho e também no outro.\n\nOK = usar a versão do Drive (do outro aparelho)\nCancelar = manter a deste aparelho e enviar'))return trazer();
+    return enviar();
+  });
+}
+function syncAll(){
+  if(syncBusy||!(window.G&&G.connected()))return Promise.resolve();
+  syncBusy=true;
+  var ps=Object.keys(S.profiles),mudou=false;
+  return ps.reduce(function(pr,k){return pr.then(function(){return syncProfile(k).then(function(x){if(x==='trazido')mudou=true})})},Promise.resolve())
+   .then(function(){syncTxt='☁ Sincronizado às '+nowStr().slice(11);syncBusy=false;if(mudou&&tab!=='google'){render(true)}else if(tab==='resumo')render(true);atualizaBadge();notificaEstoque()})
+   .catch(function(e){syncBusy=false;syncTxt='☁ Não sincronizou: '+(e&&e.message?e.message:'erro')});
+}
+function autoSync(){
+  if(!(window.G&&G.configured()))return;
+  if(G.connected())return syncAll();
+  G.silent().then(syncAll).catch(function(){syncTxt='☁ Sincronização pausada: toque no ☁ para conectar';if(tab==='resumo')render(true)});
+}
+document.addEventListener('visibilitychange',function(){if(document.visibilityState==='visible')autoSync()});
 
 /* ---------- Resumo ---------- */
 function trendTxt(bio){
@@ -72,7 +186,8 @@ function trendTxt(bio){
   return'<p class="mut" style="margin:4px 0 0">O peso caiu '+dif+' kg entre '+a.d+' e '+b.d+'.</p>';
 }
 function vResumo(){
-  var p=P(),h='';
+  var p=P(),h=alertaHtml();
+  if(syncTxt)h+='<p class="mut" style="margin:0 0 6px;text-align:right">'+esc(syncTxt)+'</p>';
   h+='<div class="card alert"><h2>⚠️ Procure urgência se houver</h2><ul style="margin:0;padding-left:18px">'+
      '<li>Grande quantidade de sangue nas fezes</li><li>Fezes pretas</li><li>Tontura ou desmaio</li><li>Fraqueza intensa</li>'+
      '<li>Dor abdominal forte, dor no peito ou falta de ar importante</li></ul></div>';
@@ -235,7 +350,7 @@ function vAgenda(){
   '<label>Título</label><input id="at" placeholder="Ex.: Consulta com coloproctologista">'+
   '<div class="row"><div><label>Data</label><input id="ad" type="date"></div><div><label>Hora</label><input id="ah" type="time" value="08:00"></div></div>'+
   '<label>Local</label><input id="al"><label>Preparo / notas</label><textarea id="ap" rows="2" placeholder="Jejum de 8–12 h, levar pedido…"></textarea>'+
-  (window.G&&G.connected()?'<button class="btn" style="width:100%;margin-bottom:8px" onclick="addAg(\'c\')">☁️ Criar na agenda "Saúde"</button>':'')+
+  (window.G&&G.connected()?'<button class="btn" style="width:100%;margin-bottom:8px" onclick="addAg(\'c\')">☁️ Criar na agenda '+((window.APP_CONFIG&&APP_CONFIG.CALENDAR_ID)?'da família':'"Saúde"')+'</button>':'')+
   '<div class="row"><button class="btn sec" onclick="addAg(\'g\')">📅 Abrir no Google Agenda</button><button class="btn sec" onclick="addAg(\'i\')">⬇️ Arquivo .ics</button></div>'+
   '<p class="mut">Confira os campos acima: eles são a prévia do evento. Com o Google conectado (☁), o botão "Criar na agenda Saúde" grava direto numa agenda própria chamada "Saúde", com alertas de 1 dia e 1 hora antes, e pede sua confirmação antes. Sem conexão, use "Abrir no Google Agenda" ou o arquivo .ics. Só consultas, coletas e retornos devem virar eventos; exames pendentes e remédios ficam no app.</p></div>';
   h+='<div class="card"><h2>Compromissos</h2>';
@@ -256,7 +371,7 @@ function addAg(kind){
   var a={t:val('at'),d:val('ad'),h:val('ah')||'08:00',l:val('al'),p:val('ap')};
   if(!a.t||!a.d){alert('Preencha título e data.');return}
   if(kind==='c'){
-    if(!confirm('Criar na agenda "Saúde"?\n\n'+a.t+'\n'+fmtDate(a.d)+' às '+a.h+(a.l?'\n'+a.l:'')+'\nAlertas: 1 dia e 1 hora antes.'))return;
+    if(!confirm('Criar na agenda'+((window.APP_CONFIG&&APP_CONFIG.CALENDAR_ID)?' da família':' "Saúde"')+'?\n\n'+a.t+'\n'+fmtDate(a.d)+' às '+a.h+(a.l?'\n'+a.l:'')+'\nAlertas: 1 dia e 1 hora antes.'))return;
     G.createEvent(a,S.cur).then(function(id){a.gid=id;P().agenda.push(a);save();render(true);toast('Criado na agenda Saúde.')})
       .catch(function(e){alert(e.message)});
     return;
@@ -452,11 +567,13 @@ function vRemedios(){
       h+='<div style="padding:8px 0;border-bottom:1px solid var(--line)"><b>'+esc(m.n)+'</b> <span class="tag t-info">'+esc(m.dose||'dose não informada')+'</span>'+
         '<div><span class="mut">Motivo:</span> '+(m.motivo?esc(m.motivo):'<span class="mut">não informado</span>')+'</div>'+
         '<div><span class="mut">Finalidade:</span> '+(m.finalidade?esc(m.finalidade):'<span class="mut">não informada</span>')+'</div>'+
+        estoqueHtml(m)+
         (m.nota&&m.nota!=='—'?'<div class="mut">Para revisar: '+esc(m.nota)+'</div>':'')+
-        '<div class="row" style="margin-top:4px"><button class="btn sm sec" onclick="editUso='+i+';render(true)">Editar</button><button class="btn sm sec" onclick="delUso('+i+')">Remover</button></div></div>';
+        '<div class="row" style="margin-top:4px"><button class="btn sm" onclick="comprei('+i+')">🛒 Comprei de novo</button><button class="btn sm sec" onclick="editUso='+i+';render(true)">Editar</button><button class="btn sm sec" onclick="delUso('+i+')">Remover</button></div></div>';
     });
   });
   h+='<p class="mut">Não interrompa, inicie nem ajuste remédios sem o prescritor. A associação de sedativos merece atenção diante de fadiga e problemas respiratórios. Informe também álcool e outros produtos ao médico.</p></div>';
+  h+='<div class="card">'+avisoBtnHtml()+'</div>';
   if(editUso<0)h+='<div class="card"><h2>Adicionar</h2>'+usoForm({tipo:'Medicamento'},-1)+'</div>';
   return h;
 }
@@ -466,12 +583,18 @@ function usoForm(m,i){
    '<label>Dose / como uso</label><input id="u_d" value="'+esc(m.dose||'')+'" placeholder="Ex.: 50 mg à noite">'+
    '<label>Motivo: por que estou usando</label><input id="u_m" value="'+esc(m.motivo||'')+'" placeholder="Ex.: indicação do médico, exame com valor baixo…">'+
    '<label>Finalidade: para que serve / o que espero</label><input id="u_f" value="'+esc(m.finalidade||'')+'">'+
+   '<label>Estoque (opcional): avisa quando estiver acabando</label>'+
+   '<div class="row wrap"><div style="flex:1;min-width:120px"><label>Data da compra</label><input type="date" id="u_c" value="'+esc(m.compra||'')+'"></div>'+
+   '<div style="flex:1;min-width:120px"><label>Quantidade comprada</label><input type="number" inputmode="decimal" id="u_q" value="'+esc(m.qtd||'')+'" placeholder="Ex.: 30"></div></div>'+
+   '<div class="row wrap"><div style="flex:1;min-width:120px"><label>Quantidade por vez</label><input type="number" inputmode="decimal" step="0.25" id="u_pv" value="'+esc(m.porVez||'')+'" placeholder="Ex.: 1"></div>'+
+   '<div style="flex:1;min-width:120px"><label>Vezes por dia</label><input type="number" inputmode="decimal" id="u_vd" value="'+esc(m.vezes||'')+'" placeholder="Ex.: 1"></div>'+
+   '<div style="flex:1;min-width:120px"><label>Avisar com (dias)</label><input type="number" inputmode="numeric" id="u_av" value="'+esc(m.aviso||7)+'"></div></div>'+
    '<label>Pontos para revisar com o médico (opcional)</label><input id="u_o" value="'+esc(m.nota&&m.nota!=='—'?m.nota:'')+'">'+
    '<div class="row"><button class="btn" onclick="saveUso('+i+')">'+(i<0?'Adicionar':'Salvar')+'</button>'+(i<0?'':'<button class="btn sec" onclick="editUso=-1;render(true)">Cancelar</button>')+'</div></div>';
 }
 function saveUso(i){
   var n=val('u_n');if(!n){alert('Informe o nome.');return}
-  var o={tipo:val('u_t'),n:n,dose:val('u_d'),motivo:val('u_m'),finalidade:val('u_f'),nota:val('u_o')};
+  var o={tipo:val('u_t'),n:n,dose:val('u_d'),motivo:val('u_m'),finalidade:val('u_f'),nota:val('u_o'),compra:val('u_c'),qtd:val('u_q'),porVez:val('u_pv'),vezes:val('u_vd'),aviso:val('u_av')||'7'};
   var p=P();if(i<0)p.meds.push(o);else p.meds[i]=o;
   editUso=-1;save();render(true);
 }
@@ -802,4 +925,5 @@ function gaShare(){
 document.querySelectorAll('#seg button').forEach(function(b){b.classList.toggle('on',b.dataset.p===S.cur)});
 showLock();
 render();
+setTimeout(autoSync,1200);
 if('serviceWorker' in navigator&&location.protocol.indexOf('http')===0)navigator.serviceWorker.register('sw.js').catch(function(){});

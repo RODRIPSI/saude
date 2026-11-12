@@ -56,6 +56,25 @@
       });
     });
   }
+  // Tenta renovar o acesso sem abrir janela (só funciona se você já autorizou antes). Falha em silêncio.
+  function silent() {
+    if (!configured() || !lsGet('g_ok')) return Promise.reject(new Error('sem login anterior'));
+    return loadGis().then(function () {
+      return new Promise(function (res, rej) {
+        var t = setTimeout(function () { rej(new Error('sem resposta')); }, 8000);
+        var tc = google.accounts.oauth2.initTokenClient({
+          client_id: CFG.GOOGLE_CLIENT_ID, scope: SCOPES,
+          callback: function (r) {
+            clearTimeout(t);
+            if (r.error) return rej(new Error(r.error));
+            token = r.access_token; tokenExp = Date.now() + ((r.expires_in || 3600) - 60) * 1000; res();
+          },
+          error_callback: function () { clearTimeout(t); rej(new Error('precisa de toque')); }
+        });
+        tc.requestAccessToken({ prompt: '' });
+      });
+    });
+  }
   function disconnect() {
     try { if (token && window.google && google.accounts) google.accounts.oauth2.revoke(token, function () {}); } catch (e) {}
     token = null; tokenExp = 0; lsDel('g_ok');
@@ -263,7 +282,7 @@
   }
 
   window.G = {
-    configured: configured, connected: connected, connect: connect, disconnect: disconnect,
+    configured: configured, connected: connected, connect: connect, silent: silent, disconnect: disconnect,
     uploadOriginal: uploadOriginal, syncSheets: syncSheets, push: push, pull: pull, share: share,
     createEvent: createEvent, deleteEvent: deleteEvent, limparCache: limparCache
   };
