@@ -13,7 +13,7 @@
   var token = null, tokenExp = 0;
   var ROOT = CFG.ROOT_FOLDER || 'Saúde a Dois';
   var TZ = CFG.TIMEZONE || 'America/Sao_Paulo';
-  var NOMES = { rodrigo: 'Rodrigo', douglas: 'Douglas' };
+  var NOMES = { rodrigo: 'Rodrigo', douglas: 'Douglas', familia: 'Família' };
 
   function lsGet(k) { try { return localStorage.getItem(k); } catch (e) { return null; } }
   function lsSet(k, v) { try { localStorage.setItem(k, v); } catch (e) {} }

@@ -9,6 +9,12 @@ function seed(){
   return {pin:'',cur:'douglas',profiles:{douglas:{"nome":"Douglas Igor Marques","bio":[],"exames":[],"pend":[],"meds":[],"diario":[],"agenda":[]},rodrigo:{"nome":"Rodrigo","bio":[],"exames":[],"pend":[],"meds":[],"diario":[],"agenda":[]}}};
 }
 var S=load()||seed();
+(function(){
+  if(!S.profiles)S.profiles={};
+  if(!S.profiles.familia)S.profiles.familia={nome:'Família',bio:[],exames:[],pend:[],meds:[],diario:[],agenda:[],docs:[],lembretes:[]};
+  if(!S.profiles.familia.lembretes)S.profiles.familia.lembretes=[];
+  if(!S.sync)S.sync={};
+})();
 
 function P(){var p=S.profiles[S.cur];if(!p.docs)p.docs=[];return p}
 function nz(x){return(x==null||x===''||(typeof x==='number'&&isNaN(x)))?'—':x}
@@ -122,10 +128,12 @@ function ativaAvisos(){Notification.requestPermission().then(function(){render(t
 function notificaEstoque(forca){
   try{
     if(!('Notification' in window)||Notification.permission!=='granted')return;
-    var al=alertasEstoque();if(!al.length)return;
+    var al=alertasEstoque(),lv=lembVencidos();if(!al.length&&!lv.length)return;
     var k='nt:'+isoHoje();if(!forca&&localStorage.getItem(k))return;localStorage.setItem(k,'1');
-    var tx=al.map(function(a){return a.n+' ('+a.quem+')'}).join(', ');
-    var op={body:'Hora de comprar: '+tx,icon:'icon-192.png',tag:'estoque'};
+    var partes=[];
+    if(al.length)partes.push('Comprar: '+al.map(function(a){return a.n+' ('+a.quem+')'}).join(', '));
+    if(lv.length)partes.push('Lembretes: '+lv.map(function(x){return x.t}).join('; '));
+    var op={body:partes.join(' · '),icon:'icon-192.png',tag:'estoque'};
     if(navigator.serviceWorker&&navigator.serviceWorker.ready)navigator.serviceWorker.ready.then(function(r){r.showNotification('Saúde a Dois',op)});
     else new Notification('Saúde a Dois',op);
   }catch(e){}
@@ -139,15 +147,15 @@ function atualizaBadge(){
 
 /* ---------- sincronização automática entre aparelhos (via Drive) ---------- */
 var syncTxt='',syncBusy=false,syncTimer=null;
-function schedulePush(){
+function schedulePush(k){
   if(!(window.G&&G.connected()))return;
-  clearTimeout(syncTimer);syncTimer=setTimeout(function(){syncProfile(S.cur)},4000);
+  clearTimeout(syncTimer);syncTimer=setTimeout(function(){syncProfile(S.cur).then(function(){return syncProfile('familia')}).catch(function(){})},4000);
 }
 function syncProfile(perfil){
   return G.pull(perfil).then(function(r){
     if(!S.sync)S.sync={};
     var p=S.profiles[perfil],ls=S.sync[perfil]||0,locChg=(p.updatedAt||0)>ls;
-    var temDados=!!(p.exames.length||p.meds.length||p.bio.length||p.diario.length||p.agenda.length||p.pend.length);
+    var temDados=!!(p.exames.length||p.meds.length||p.bio.length||p.diario.length||p.agenda.length||p.pend.length||(p.lembretes&&p.lembretes.length));
     function enviar(){return G.push(perfil,p).then(function(){S.sync[perfil]=Date.now()+3000;persist();return 'enviado'})}
     function trazer(){
       r.dados.updatedAt=Date.now();S.profiles[perfil]=r.dados;persist();S.sync[perfil]=Date.now();persist();return 'trazido';
@@ -176,6 +184,47 @@ function autoSync(){
 }
 document.addEventListener('visibilitychange',function(){if(document.visibilityState==='visible')autoSync()});
 
+/* ---------- lembretes rápidos (compartilhados entre os aparelhos) ---------- */
+function F(){return S.profiles.familia}
+function saveFam(){F().updatedAt=Date.now();persist();schedulePush()}
+function lembHtml(){
+  var L=F().lembretes,pend=L.filter(function(x){return!x.feito}),hoje=isoHoje(),h='<div class="card"><h2>📝 Lembretes</h2>';
+  h+='<input id="l_t" placeholder="Escreva um lembrete rápido (ex.: marcar retorno com o endócrino)">'+
+     '<div class="row wrap"><div style="flex:1;min-width:130px"><label>Data (opcional)</label><input type="date" id="l_d"></div>'+
+     '<div style="flex:1;min-width:110px"><label>Hora (opcional)</label><input type="time" id="l_h"></div></div>';
+  if(window.G&&G.connected())h+='<label style="display:flex;gap:8px;align-items:center;color:var(--ink)"><input type="checkbox" id="l_g" style="width:auto">Colocar também na agenda '+((window.APP_CONFIG&&APP_CONFIG.CALENDAR_ID)?'da família':'Saúde')+' (precisa de data)</label>';
+  else h+='<p class="mut" style="margin:4px 0">Para colocar na agenda do Google, conecte o ☁ primeiro.</p>';
+  h+='<button class="btn" style="width:100%;margin-top:6px" onclick="addLemb()">Salvar lembrete</button>';
+  if(!pend.length)h+='<div class="empty">Nenhum lembrete pendente.</div>';
+  pend.sort(function(x,y){return(x.d||'9999').localeCompare(y.d||'9999')});
+  pend.forEach(function(x){
+    var i=L.indexOf(x),atras=x.d&&x.d<hoje,tag=x.d?'<span class="tag '+(atras?'t-hi':(x.d===hoje?'t-lim':'t-info'))+'">'+isoBr(x.d)+(x.h?' '+esc(x.h):'')+(atras?' · atrasado':(x.d===hoje?' · hoje':''))+'</span> ':'';
+    h+='<div style="padding:8px 0;border-top:1px solid var(--line)">'+tag+esc(x.t)+
+       '<div class="mut">'+(x.por?'por '+esc(x.por):'')+(x.gid?' · 📅 na agenda':'')+'</div>'+
+       '<div class="row" style="margin-top:4px"><button class="btn sm" onclick="doneLemb('+i+')">✓ Feito</button><button class="btn sm sec" onclick="delLemb('+i+')">Apagar</button></div></div>';
+  });
+  var feitos=L.length-pend.length;
+  if(feitos)h+='<p class="mut" style="margin:8px 0 0">'+feitos+' concluído(s). <a href="#" onclick="limpaFeitos();return false">Limpar concluídos</a></p>';
+  return h+'</div>';
+}
+function addLemb(){
+  var t=val('l_t');if(!t){alert('Escreva o lembrete.');return}
+  var d=val('l_d'),hh=val('l_h'),g=document.getElementById('l_g'),querAg=g&&g.checked;
+  var o={id:Date.now(),t:t,d:d,h:hh,por:P().nome.split(' ')[0],feito:false};
+  function guarda(){F().lembretes.push(o);saveFam();render(true)}
+  if(querAg){
+    if(!d){alert('Para colocar na agenda, escolha a data.');return}
+    G.createEvent({t:'📝 '+t,d:d,h:hh||'09:00',l:'',p:'Lembrete do app Saúde a Dois (criado por '+o.por+')'},'familia')
+      .then(function(id){o.gid=id;guarda();toast('Lembrete salvo e colocado na agenda.')})
+      .catch(function(e){alert('Não consegui colocar na agenda: '+e.message+'\n\nO lembrete foi salvo só no app.');guarda()});
+  }else{guarda()}
+}
+function tiraDaAgenda(x){if(x&&x.gid&&window.G&&G.connected())G.deleteEvent(x.gid).catch(function(){toast('O evento continua na agenda Google. Remova por lá.')})}
+function doneLemb(i){var x=F().lembretes[i];x.feito=true;tiraDaAgenda(x);x.gid='';saveFam();render(true)}
+function delLemb(i){var x=F().lembretes[i];if(!confirm('Apagar este lembrete?'))return;tiraDaAgenda(x);F().lembretes.splice(i,1);saveFam();render(true)}
+function limpaFeitos(){F().lembretes=F().lembretes.filter(function(x){return!x.feito});saveFam();render(true)}
+function lembVencidos(){return F().lembretes.filter(function(x){return!x.feito&&x.d&&x.d<=isoHoje()})}
+
 /* ---------- Resumo ---------- */
 function trendTxt(bio){
   if(bio.length<2)return'';
@@ -186,7 +235,7 @@ function trendTxt(bio){
   return'<p class="mut" style="margin:4px 0 0">O peso caiu '+dif+' kg entre '+a.d+' e '+b.d+'.</p>';
 }
 function vResumo(){
-  var p=P(),h=alertaHtml();
+  var p=P(),h=alertaHtml()+lembHtml();
   if(syncTxt)h+='<p class="mut" style="margin:0 0 6px;text-align:right">'+esc(syncTxt)+'</p>';
   h+='<div class="card alert"><h2>⚠️ Procure urgência se houver</h2><ul style="margin:0;padding-left:18px">'+
      '<li>Grande quantidade de sangue nas fezes</li><li>Fezes pretas</li><li>Tontura ou desmaio</li><li>Fraqueza intensa</li>'+
