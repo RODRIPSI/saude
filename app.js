@@ -185,6 +185,7 @@ function autoSync(){
 document.addEventListener('visibilitychange',function(){if(document.visibilityState==='visible')autoSync()});
 
 /* ---------- lembretes rápidos (compartilhados entre os aparelhos) ---------- */
+function agendaNome(sp){var id=window.APP_CONFIG&&APP_CONFIG.CALENDAR_ID,n=id==='primary'?'principal do Google':(id?'da família':'"Saúde"');return(sp?' ':'')+n}
 function F(){return S.profiles.familia}
 function saveFam(){F().updatedAt=Date.now();persist();schedulePush()}
 function lembHtml(){
@@ -192,7 +193,7 @@ function lembHtml(){
   h+='<input id="l_t" placeholder="Escreva um lembrete rápido (ex.: marcar retorno com o endócrino)">'+
      '<div class="row wrap"><div style="flex:1;min-width:130px"><label>Data (opcional)</label><input type="date" id="l_d"></div>'+
      '<div style="flex:1;min-width:110px"><label>Hora (opcional)</label><input type="time" id="l_h"></div></div>';
-  if(window.G&&G.connected())h+='<label style="display:flex;gap:8px;align-items:center;color:var(--ink)"><input type="checkbox" id="l_g" style="width:auto">Colocar também na agenda '+((window.APP_CONFIG&&APP_CONFIG.CALENDAR_ID)?'da família':'Saúde')+' (precisa de data)</label>';
+  if(window.G&&G.connected())h+='<label style="display:flex;gap:8px;align-items:center;color:var(--ink)"><input type="checkbox" id="l_g" style="width:auto">Colocar também na agenda '+agendaNome()+' (precisa de data)</label>';
   else h+='<p class="mut" style="margin:4px 0">Para colocar na agenda do Google, conecte o ☁ primeiro.</p>';
   h+='<button class="btn" style="width:100%;margin-top:6px" onclick="addLemb()">Salvar lembrete</button>';
   if(!pend.length)h+='<div class="empty">Nenhum lembrete pendente.</div>';
@@ -399,7 +400,7 @@ function vAgenda(){
   '<label>Título</label><input id="at" placeholder="Ex.: Consulta com coloproctologista">'+
   '<div class="row"><div><label>Data</label><input id="ad" type="date"></div><div><label>Hora</label><input id="ah" type="time" value="08:00"></div></div>'+
   '<label>Local</label><input id="al"><label>Preparo / notas</label><textarea id="ap" rows="2" placeholder="Jejum de 8–12 h, levar pedido…"></textarea>'+
-  (window.G&&G.connected()?'<button class="btn" style="width:100%;margin-bottom:8px" onclick="addAg(\'c\')">☁️ Criar na agenda '+((window.APP_CONFIG&&APP_CONFIG.CALENDAR_ID)?'da família':'"Saúde"')+'</button>':'')+
+  (window.G&&G.connected()?'<button class="btn" style="width:100%;margin-bottom:8px" onclick="addAg(\'c\')">☁️ Criar na agenda '+agendaNome()+'</button>':'')+
   '<div class="row"><button class="btn sec" onclick="addAg(\'g\')">📅 Abrir no Google Agenda</button><button class="btn sec" onclick="addAg(\'i\')">⬇️ Arquivo .ics</button></div>'+
   '<p class="mut">Confira os campos acima: eles são a prévia do evento. Com o Google conectado (☁), o botão "Criar na agenda Saúde" grava direto numa agenda própria chamada "Saúde", com alertas de 1 dia e 1 hora antes, e pede sua confirmação antes. Sem conexão, use "Abrir no Google Agenda" ou o arquivo .ics. Só consultas, coletas e retornos devem virar eventos; exames pendentes e remédios ficam no app.</p></div>';
   h+='<div class="card"><h2>Compromissos</h2>';
@@ -420,7 +421,7 @@ function addAg(kind){
   var a={t:val('at'),d:val('ad'),h:val('ah')||'08:00',l:val('al'),p:val('ap')};
   if(!a.t||!a.d){alert('Preencha título e data.');return}
   if(kind==='c'){
-    if(!confirm('Criar na agenda'+((window.APP_CONFIG&&APP_CONFIG.CALENDAR_ID)?' da família':' "Saúde"')+'?\n\n'+a.t+'\n'+fmtDate(a.d)+' às '+a.h+(a.l?'\n'+a.l:'')+'\nAlertas: 1 dia e 1 hora antes.'))return;
+    if(!confirm('Criar na agenda'+agendaNome(true)+'?\n\n'+a.t+'\n'+fmtDate(a.d)+' às '+a.h+(a.l?'\n'+a.l:'')+'\nAlertas: 1 dia e 1 hora antes.'))return;
     G.createEvent(a,S.cur).then(function(id){a.gid=id;P().agenda.push(a);save();render(true);toast('Criado na agenda Saúde.')})
       .catch(function(e){alert(e.message)});
     return;
